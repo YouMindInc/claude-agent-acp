@@ -1345,6 +1345,7 @@ describe("stop reason propagation", () => {
       },
       configOptions: [],
       promptRunning: false,
+      _draining: false,
       pendingMessages: new Map(),
       nextPendingOrder: 0,
       abortController: new AbortController(),
@@ -1480,6 +1481,7 @@ describe("stop reason propagation", () => {
       abortController: new AbortController(),
       configOptions: [],
       promptRunning: false,
+      _draining: false,
       pendingMessages: new Map(),
       nextPendingOrder: 0,
     };
@@ -1552,6 +1554,7 @@ describe("session/close", () => {
       },
       configOptions: [],
       promptRunning: false,
+      _draining: false,
       pendingMessages: new Map(),
       nextPendingOrder: 0,
       abortController: new AbortController(),

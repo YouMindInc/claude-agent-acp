@@ -118,6 +118,7 @@ type Session = {
   models: SessionModelState;
   configOptions: SessionConfigOption[];
   promptRunning: boolean;
+  _draining: boolean;
   pendingMessages: Map<string, { resolve: (cancelled: boolean) => void; order: number }>;
   nextPendingOrder: number;
   abortController: AbortController;
@@ -458,6 +459,7 @@ export class ClaudeAcpAgent implements Agent {
       throw new Error("Session not found");
     }
 
+    session._draining = false;
     session.cancelled = false;
     session.accumulatedUsage = {
       inputTokens: 0,
@@ -839,6 +841,7 @@ export class ClaudeAcpAgent implements Agent {
     } finally {
       if (!handedOff) {
         session.promptRunning = false;
+        this._startBackgroundDrain(params.sessionId);
         // This usually should not happen, but in case the loop finishes
         // without claude sending all message replays, we resolve the
         // next pending prompt call to ensure no prompts get stuck.
@@ -853,6 +856,66 @@ export class ClaudeAcpAgent implements Agent {
         }
       }
     }
+  }
+
+  /**
+   * Keep reading query stream after prompt() returns for agent team support.
+   * Team member (inbox) messages arrive after prompt() returns; this background
+   * loop forwards them to the ACP client.
+   */
+  private _startBackgroundDrain(sessionId: string): void {
+    const session = this.sessions[sessionId];
+    if (!session || session._draining) return;
+    session._draining = true;
+    (async () => {
+      try {
+        while (session._draining && !session.promptRunning) {
+          const { value: msg, done } = await session.query.next();
+          if (done || !msg || session.promptRunning) break;
+          if (msg.type === "stream_event") {
+            for (const n of streamEventToAcpNotifications(
+              msg,
+              sessionId,
+              this.toolUseCache,
+              this.client,
+              this.logger,
+              { clientCapabilities: this.clientCapabilities, cwd: session.cwd },
+            )) {
+              await this.client.sessionUpdate(n);
+            }
+          } else if (
+            (msg.type === "assistant" || msg.type === "user") &&
+            Array.isArray(msg.message?.content)
+          ) {
+            const content =
+              msg.type === "assistant"
+                ? msg.message.content.filter(
+                    (i: { type: string }) => !["text", "thinking"].includes(i.type),
+                  )
+                : msg.message.content;
+            for (const n of toAcpNotifications(
+              content,
+              msg.message.role,
+              sessionId,
+              this.toolUseCache,
+              this.client,
+              this.logger,
+              {
+                clientCapabilities: this.clientCapabilities,
+                parentToolUseId: msg.parent_tool_use_id,
+                cwd: session.cwd,
+              },
+            )) {
+              await this.client.sessionUpdate(n);
+            }
+          }
+        }
+      } catch {
+        // Drain loop ended — expected on session close
+      } finally {
+        session._draining = false;
+      }
+    })();
   }
 
   async cancel(params: CancelNotification): Promise<void> {
@@ -1499,6 +1562,7 @@ export class ClaudeAcpAgent implements Agent {
       models,
       configOptions,
       promptRunning: false,
+      _draining: false,
       pendingMessages: new Map(),
       nextPendingOrder: 0,
       abortController,
