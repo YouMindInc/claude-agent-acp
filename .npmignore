@@ -1,0 +1,2 @@
+# Override parent .gitignore's `dist` rule so npm pack of the outer
+# @youmindinc/youcomputer package includes the pre-built vendor dist.
